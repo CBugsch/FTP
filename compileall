@@ -1,0 +1,11 @@
+#!/bin/bash
+
+#compile file transfer server
+gcc -o ftserver ftserver.c -std=gnu99
+
+#give execute permission to ftclient
+chmod a+x ftclient
+
+
+
+

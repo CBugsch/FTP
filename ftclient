@@ -1,0 +1,188 @@
+#!/usr/bin/python
+"""
+Name: Christopher Bugsch
+Assignment: Program 2
+Date: 6/3/18
+This program will connect to a server and make a request for either the server's directory or
+a text file. If the request is deemed valid, the program will create a new socket and allow
+the server to connect to it to transfer the data. For information on how to use the program
+see the attached README.txt for instructions.
+
+See README.txt for info on cited resources used to assist in writing this program.
+"""
+from socket import *
+import SocketServer
+from thread import *
+import sys
+
+
+# Set up global vars
+control_connection = None
+server_host = sys.argv[1]       # save server host addr from cmd line input
+server_port = int(sys.argv[2])  # save server port from cmd line input
+client_host = gethostname()     # save the host name
+client_request = sys.argv[3]    # save client request from cmd line input
+if client_request == "-l":
+    client_port = int(sys.argv[4])  # port number is 5th argument
+elif client_request == "-g":
+    client_port = int(sys.argv[5])  # port number is 6th argument
+    if sys.argv[4].endswith('.txt'):    # confirm file is a text file
+        file_name = sys.argv[4]
+    else:
+        print "Invalid file type"
+        sys.exit(0)
+else:
+    print "Invalid request command"
+    sys.exit(0)
+
+
+# Begin function definitions
+def open_data_connection():
+    """
+    Function creates a data socket and allows the server to connect. Once the connection
+    has been established, the receive_message function is called so the program can
+    process the data being sent.
+    :return:
+    """
+    # setup up data socket, bind and start listening
+    data_socket = socket(AF_INET, SOCK_STREAM)
+    data_socket.bind((client_host, client_port))
+    data_socket.listen(1)
+
+    # connect to server
+    server_socket, server_addr = data_socket.accept()
+
+    receive_message(server_socket)  # get data from server through data_socket
+
+
+def initiate_contact():
+    """
+    Function simply establishes a control connection to the server
+    :return:
+    """
+    # connect to server's control socket
+    global control_connection
+    control_connection = socket()
+    control_connection.connect((server_host, server_port))
+    print ("Established control connection with %s:%s" % (server_host, server_port))
+
+
+def make_request():
+    """
+    Function builds a custom string based on the params passed into the program. It then
+    sends the string the the server via the control connection. If the server responds with
+    'good', the program will call the open_data_connection function. Else the program closes
+    the control connection and shutsdown.
+    :return:
+    """
+    # send server request command on control socket
+    if client_request == "-l":
+        control_connection.send(client_host + ' ' + str(client_port) + ' -l')
+    else:
+        control_connection.send(client_host + ' ' + str(client_port) + ' -g ' + sys.argv[4])
+    # get server's response to request
+    message = control_connection.recv(1025)
+    if "good" in message:
+        open_data_connection()
+    else:
+        control_connection.close()
+        print message
+        sys.exit(0)
+
+
+def receive_message(d_s):
+    """
+    Function handles the request's response from the server. If the request was for directory contents,
+    it will print the info to the console and end exit. If it eas for a file, it will call the receive_file
+    function to process the data. After processing the data, and back and forth confirmation between the client
+    and server will occur before closing the control connection and shutting down.
+    :param d_s: data socket
+    :return:
+    """
+    if client_request == "-g":
+        receive_file(d_s)
+    else:
+        print ("Receiving directory structure from %s:%d" % (server_host, server_port))
+        message = d_s.recv(1025)    # get directory contents
+        print message   # print to console
+        del message     # clear message
+    control_connection.send("success")  # send confirmation message to server through control socket
+    message = control_connection.recv(1025)  # confirm server is done sending data
+    if "done" in message:
+        print "transfer complete"
+        control_connection.close()  # close control connection
+
+
+def receive_file(d_s):
+    """
+    Function first receives a message from the control connection to verify the file requested is
+    available. If it was not, the function will print the message from the server and close the program.
+    If the file does exist, it will first check for duplicate file names, then open the file for writing.
+    The program will then enter a loop that receives a connection message that tells the program how many bytes
+    of data to receive. Then the program will continue trying to receive that many bytes. After it has completed,
+    it will send a confirmation message back to the server that it is ready to receive more data and write the current
+    data to the open file.
+    :param d_s: data socket
+    :return:
+    """
+    # confirm server can access file
+    message = control_connection.recv(1024)
+    if "good" in message:
+        del message     # clear message
+        print ("Receiving %s file from %s:%d" % (file_name, server_host, server_port))
+        check_file_name(file_name)  # handle duplicate file name
+        f = open(file_name, "w+")     # open file for writing
+        while True:
+            char_count = control_connection.recv(7)     # get number of bytes of data being sent
+            if 0 < int(char_count):     # check if server is still sending data
+                message = d_s.recv(int(char_count), MSG_WAITALL)    # get part of file from server
+                control_connection.send("good")     # tell server we received the data
+                f.write(message)    # write data to local file
+                del message     # clear message
+                del char_count  # clear char_count
+            else:   # server is done sending data
+                break
+    else:   # file could not be opened
+        print message   # print error message from server
+        control_connection.close()  # close control connection
+        sys.exit(0)     # exit program
+
+
+def check_file_name(f_name):
+    """
+    Function attempts to open the file name passed in from the cmd line.
+    If the file exists, the function will prompt the user to overwrite the existing file.
+    If the user enters 'y', the file will be overwritten. If user enters anything else, the
+    program will assume the user did not want to over write the file and prompt the user for
+    a new file name.
+    If the file does not exist, a message will print saying the file will be created.
+    :param f_name: Should be a string value of a file name + extension
+    :return:
+    """
+    global file_name
+    try:    # attempt to open file for reading
+        f = open(f_name, "r")
+        if f is not None:   # file name already exists
+            answer = raw_input("File name already exists\nWould you like to overwrite the file? (y/n)> ")
+            if answer != "y":   # get new file name
+                # prompt for new name
+                new_name = raw_input("Enter a new file name> ")
+                file_name = new_name + ".txt"
+                check_file_name(file_name)
+            else:
+                print ("Overwriting file: %s" % file_name)
+            f.close()
+    except IOError:
+        # file name doesn't exist
+        print ("Creating new file: %s" % file_name)
+
+
+# Begin code to be executed
+initiate_contact()
+make_request()
+# end program
+
+
+
+
+
